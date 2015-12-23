@@ -12,6 +12,8 @@ import android.widget.FrameLayout;
 
 public class MainActivity extends AppCompatActivity {
 
+    private static final String TAG = MainActivity.class.getName();
+
     private Camera2Preview mCamera2Preview;
     private FrameLayout mFrameLayout;
 
@@ -26,8 +28,8 @@ public class MainActivity extends AppCompatActivity {
         fab.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                Snackbar.make(view, "Replace with your own action", Snackbar.LENGTH_LONG)
-                        .setAction("Action", null).show();
+                Snackbar.make(view, "Capture the photo", Snackbar.LENGTH_LONG).setAction("Action", null).show();
+                mCamera2Preview.takePicture();
             }
         });
 

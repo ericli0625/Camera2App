@@ -2,8 +2,12 @@ package camera2.erichc_li.com.camera2app;
 
 import android.Manifest;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.ImageFormat;
+import android.graphics.Matrix;
 import android.graphics.Point;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
@@ -13,7 +17,10 @@ import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.StreamConfigurationMap;
+import android.media.Image;
 import android.media.ImageReader;
+import android.net.Uri;
+import android.os.Environment;
 import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
 import android.util.Log;
@@ -22,15 +29,21 @@ import android.view.Surface;
 import android.view.TextureView;
 import android.view.WindowManager;
 
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.text.SimpleDateFormat;
 import java.util.Arrays;
-import java.util.List;
+import java.util.Date;
 
 public class Camera2Preview extends TextureView implements TextureView.SurfaceTextureListener {
 
     private static final String TAG = Camera2Preview.class.getName();
     private final Context mContext;
     private String mCameraId;
-    private StreamConfigurationMap mmap;
+    private StreamConfigurationMap mapScalerStreamConig;
     private CameraCharacteristics mCameraCharacteristics;
 
     private Size mPreviewSize;
@@ -72,7 +85,7 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
                 if (facingID != null && facingID == CameraCharacteristics.LENS_FACING_BACK && map != null) {
                     mCameraId = cameraId;
                     mCameraCharacteristics = cameracharacteristics;
-                    mmap = map;
+                    mapScalerStreamConig = map;
                     break;
                 }
             }
@@ -128,11 +141,11 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
 
     private void setUpCameraOutputs(int width, int height) {
 
-        setUpPreviewSize(width, height);
+        setUpPreviewOutputs(width, height);
 
     }
 
-    private void setUpPreviewSize(int width, int height){
+    private void setUpPreviewOutputs (int width, int height){
 
         // Find out if we need to swap dimension to get the preview size relative to sensor coordinate.
 
@@ -159,13 +172,13 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
                 Log.e(TAG, "Display rotation is invalid: " + displayRotation);
         }
 
-        //Log.i(TAG, "setUpPreviewSize()...sensorOrientation = "+sensorOrientation+", displayRotation = "+displayRotation+", swappedDimensions = "+swappedDimensions);
+        //Log.i(TAG, "setUpPreviewOutputs()...sensorOrientation = "+sensorOrientation+", displayRotation = "+displayRotation+", swappedDimensions = "+swappedDimensions);
 
         Point displaySize = new Point();
         windowManager.getDefaultDisplay().getSize(displaySize);
 
-        //Log.i(TAG, "setUpPreviewSize()...TextureViewwidth = " + width + ", TextureViewheight = " + height);
-        //Log.i(TAG, "setUpPreviewSize()...displaySize.x = " + displaySize.x + ", displaySize.y = " + displaySize.y);
+        //Log.i(TAG, "setUpPreviewOutputs()...TextureViewwidth = " + width + ", TextureViewheight = " + height);
+        //Log.i(TAG, "setUpPreviewOutputs()...displaySize.x = " + displaySize.x + ", displaySize.y = " + displaySize.y);
 
         int rotatedPreviewWidth = width;
         int rotatedPreviewHeight = height;
@@ -177,7 +190,7 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
 
         mPreviewSize = new Size (rotatedPreviewWidth,rotatedPreviewHeight);
 
-        //Log.i(TAG, "setUpPreviewSize()...rotatedPreviewWidth = "+rotatedPreviewWidth+", rotatedPreviewHeight = "+rotatedPreviewHeight);
+        //Log.i(TAG, "setUpPreviewOutputs()...rotatedPreviewWidth = "+rotatedPreviewWidth+", rotatedPreviewHeight = "+rotatedPreviewHeight);
 
     }
 
@@ -191,13 +204,7 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
         // This is the output Surface we need to start preview.
         Surface mSurface = new Surface(mTextureView);
 
-        //Size[] outputSize = mmap.getOutputSizes(ImageFormat.JPEG);
-        //Size[] previewSizes = mmap.getOutputSizes(SurfaceTexture.class);
-
-        // For still image captures, we use the largest available size.
-        //mImageReader = ImageReader.newInstance(outputSize[0].getWidth(), outputSize[0].getHeight(), ImageFormat.JPEG, /*maxImages*/2);
-        //mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, null);
-
+        setUpPhotoOutputs();
 
         // 2.
         // We set up a CaptureRequest.Builder with the output Surface.
@@ -211,7 +218,7 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
         // 3.
         // Here, we create a CameraCaptureSession for camera preview.
         try {
-            mCameraDevice.createCaptureSession(Arrays.asList(mSurface),
+            mCameraDevice.createCaptureSession(Arrays.asList(mSurface, mImageReader.getSurface()),
                     new CameraCaptureSession.StateCallback() {
 
                         @Override
@@ -224,6 +231,7 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
                                 // Auto focus should be continuous for camera preview.
                                 mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
 
+                                // 4.
                                 // Finally, we start displaying the camera preview.
                                 mCaptureSession.setRepeatingRequest(mPreviewRequestBuilder.build(), null, null);
                             } catch (CameraAccessException e) {
@@ -241,6 +249,97 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
             e1.printStackTrace();
         }
 
+    }
+
+    public void setUpPhotoOutputs() {
+
+        /*
+        for (Size mSize : mapScalerStreamConig.getOutputSizes(ImageFormat.JPEG)){
+            Log.i(TAG,"mSize = "+mSize);
+        }
+        */
+
+        // create the photo size
+        Size[] outputSize = mapScalerStreamConig.getOutputSizes(ImageFormat.JPEG);
+
+        // For still image captures, we use the largest available size.
+        mImageReader = ImageReader.newInstance(outputSize[0].getWidth(), outputSize[0].getHeight(), ImageFormat.JPEG, /*maxImages*/2);
+        mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, null);
+
+    }
+
+    public void takePicture() {
+
+        try {
+            // We set up a CaptureRequest.Builder to capture the pic.
+            CaptureRequest.Builder captureBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+            captureBuilder.addTarget(mImageReader.getSurface());
+            mCaptureSession.capture(captureBuilder.build(), null, null);
+        } catch (CameraAccessException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+
+    }
+
+    private File getOutputMediaFile() {
+
+        File path = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "100ANDRO");
+        String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+        String photoPath = path.getPath() + File.separator + "IMG_" + timeStamp + ".jpg";
+        Log.i(TAG, photoPath);
+        File photo = new File(photoPath);
+
+        return photo;
+    }
+
+    private final ImageReader.OnImageAvailableListener mOnImageAvailableListener = new ImageReader.OnImageAvailableListener() {
+
+        public void onImageAvailable(ImageReader reader) {
+
+            Image mImage = reader.acquireLatestImage();
+            ByteBuffer buffer = mImage.getPlanes()[0].getBuffer();
+            byte[] bytes = new byte[buffer.remaining()];
+            buffer.get(bytes);
+            FileOutputStream output = null;
+
+            Bitmap pictureTaken = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+            Matrix matrix = new Matrix();
+            matrix.preRotate(90);
+            pictureTaken = Bitmap.createBitmap(pictureTaken ,0,0, pictureTaken.getWidth(), pictureTaken.getHeight(),matrix,true);
+
+            try {
+
+                output = new FileOutputStream(getOutputMediaFile().getPath());
+                pictureTaken.compress(Bitmap.CompressFormat.JPEG, 50, output);
+                pictureTaken.recycle();
+                output.write(bytes);
+                output.close();
+                galleryAddPic(getOutputMediaFile());
+
+            } catch (FileNotFoundException e) {
+                e.printStackTrace();
+            } catch (IOException e) {
+                e.printStackTrace();
+            } finally {
+                mImage.close();
+                if (null != output) {
+                    try {
+                        output.close();
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+
+        }
+
+    };
+
+    private void galleryAddPic(File photoPath) {
+        Uri contentUri = Uri.fromFile(photoPath);
+        Intent mediaScanIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE,contentUri);
+        mContext.sendBroadcast(mediaScanIntent);
     }
 
     @Override
