@@ -21,6 +21,8 @@ import android.media.Image;
 import android.media.ImageReader;
 import android.net.Uri;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
 import android.util.Log;
@@ -49,9 +51,18 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
     private Size mPreviewSize;
 
     private CaptureRequest.Builder mPreviewRequestBuilder;
-    private CaptureRequest mPreviewRequest;
     private CameraCaptureSession mCaptureSession;
     private ImageReader mImageReader;
+
+    /**
+     * An additional thread for running tasks that shouldn't block the UI.
+     */
+    private HandlerThread mBackgroundThread;
+
+    /**
+     * A {@link Handler} for running tasks in the background.
+     */
+    private Handler mBackgroundHandler;
 
     public Camera2Preview(Context context) {
         super(context);
@@ -62,7 +73,7 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
     @Override
     public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
         Log.i(TAG, "onSurfaceTextureAvailable()...");
-
+        startBackgroundThread();
         openCamera();
         setUpCameraOutputs(width, height);
 
@@ -142,6 +153,7 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
     private void setUpCameraOutputs(int width, int height) {
 
         setUpPreviewOutputs(width, height);
+        setUpPhotoOutputs();
 
     }
 
@@ -204,12 +216,10 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
         // This is the output Surface we need to start preview.
         Surface mSurface = new Surface(mTextureView);
 
-        setUpPhotoOutputs();
-
         // 2.
         // We set up a CaptureRequest.Builder with the output Surface.
         try {
-            mPreviewRequestBuilder  = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+            mPreviewRequestBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
             mPreviewRequestBuilder.addTarget(mSurface);
         } catch (CameraAccessException e) {
             e.printStackTrace();
@@ -219,31 +229,31 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
         // Here, we create a CameraCaptureSession for camera preview.
         try {
             mCameraDevice.createCaptureSession(Arrays.asList(mSurface, mImageReader.getSurface()),
-                    new CameraCaptureSession.StateCallback() {
+                new CameraCaptureSession.StateCallback() {
 
-                        @Override
-                        public void onConfigured(@NonNull CameraCaptureSession cameraCaptureSession) {
+                    @Override
+                    public void onConfigured(@NonNull CameraCaptureSession cameraCaptureSession) {
 
-                            // When the session is ready, we start displaying the preview.
-                            mCaptureSession = cameraCaptureSession;
-                            try {
+                        // When the session is ready, we start displaying the preview.
+                        mCaptureSession = cameraCaptureSession;
+                        try {
 
-                                // Auto focus should be continuous for camera preview.
-                                mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+                            // Auto focus should be continuous for camera preview.
+                            mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
 
-                                // 4.
-                                // Finally, we start displaying the camera preview.
-                                mCaptureSession.setRepeatingRequest(mPreviewRequestBuilder.build(), null, null);
-                            } catch (CameraAccessException e) {
-                                e.printStackTrace();
-                            }
+                            // 4.
+                            // Finally, we start displaying the camera preview.
+                            mCaptureSession.setRepeatingRequest(mPreviewRequestBuilder.build(), null, mBackgroundHandler);
+                        } catch (CameraAccessException e) {
+                            e.printStackTrace();
                         }
+                    }
 
-                        @Override
-                        public void onConfigureFailed(@NonNull CameraCaptureSession cameraCaptureSession) {
-                            Log.i(TAG,"Failed");
-                        }
-                    }, null
+                    @Override
+                    public void onConfigureFailed(@NonNull CameraCaptureSession cameraCaptureSession) {
+                        Log.i(TAG,"Failed");
+                    }
+                }, null
             );
         } catch (CameraAccessException e1) {
             e1.printStackTrace();
@@ -264,7 +274,7 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
 
         // For still image captures, we use the largest available size.
         mImageReader = ImageReader.newInstance(outputSize[0].getWidth(), outputSize[0].getHeight(), ImageFormat.JPEG, /*maxImages*/2);
-        mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, null);
+        mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mBackgroundHandler);
 
     }
 
@@ -274,7 +284,7 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
             // We set up a CaptureRequest.Builder to capture the pic.
             CaptureRequest.Builder captureBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
             captureBuilder.addTarget(mImageReader.getSurface());
-            mCaptureSession.capture(captureBuilder.build(), null, null);
+            mCaptureSession.capture(captureBuilder.build(), null, mBackgroundHandler);
         } catch (CameraAccessException e) {
             // TODO Auto-generated catch block
             e.printStackTrace();
@@ -298,7 +308,33 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
         public void onImageAvailable(ImageReader reader) {
 
             Image mImage = reader.acquireLatestImage();
+            File mPicPath = getOutputMediaFile();
+            mBackgroundHandler.post(new ImageSaver(mImage, mPicPath));
+
+        }
+
+    };
+
+
+    private class ImageSaver implements Runnable {
+
+        private final Image mImage;
+        private final File mPicPath;
+
+        ImageSaver(Image image,File picPath){
+            mImage = image;
+            mPicPath = picPath;
+        }
+
+        @Override
+        public void run() {
+
+            if (mImage==null){
+                return;
+            }
+
             ByteBuffer buffer = mImage.getPlanes()[0].getBuffer();
+
             byte[] bytes = new byte[buffer.remaining()];
             buffer.get(bytes);
             FileOutputStream output = null;
@@ -310,12 +346,12 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
 
             try {
 
-                output = new FileOutputStream(getOutputMediaFile().getPath());
+                output = new FileOutputStream(mPicPath.getPath());
                 pictureTaken.compress(Bitmap.CompressFormat.JPEG, 50, output);
                 pictureTaken.recycle();
                 output.write(bytes);
                 output.close();
-                galleryAddPic(getOutputMediaFile());
+                galleryAddPic(mPicPath);
 
             } catch (FileNotFoundException e) {
                 e.printStackTrace();
@@ -331,15 +367,36 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
                     }
                 }
             }
-
         }
-
-    };
+    }
 
     private void galleryAddPic(File photoPath) {
         Uri contentUri = Uri.fromFile(photoPath);
         Intent mediaScanIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE,contentUri);
         mContext.sendBroadcast(mediaScanIntent);
+    }
+
+    /**
+     * Starts a background thread and its {@link Handler}.
+     */
+    private void startBackgroundThread() {
+        mBackgroundThread = new HandlerThread("CameraBackground");
+        mBackgroundThread.start();
+        mBackgroundHandler = new Handler(mBackgroundThread.getLooper());
+    }
+
+    /**
+     * Stops the background thread and its {@link Handler}.
+     */
+    private void stopBackgroundThread() {
+        mBackgroundThread.quitSafely();
+        try {
+            mBackgroundThread.join();
+            mBackgroundThread = null;
+            mBackgroundHandler = null;
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
     }
 
     @Override
@@ -349,6 +406,7 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
     @Override
     public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
         Log.i(TAG, "onSurfaceTextureDestroyed()...");
+        stopBackgroundThread();
         mCameraDevice.close();
         mCameraDevice = null;
         return false;
