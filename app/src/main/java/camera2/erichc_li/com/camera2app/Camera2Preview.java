@@ -15,7 +15,9 @@ import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
+import android.hardware.camera2.CaptureFailure;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.Image;
 import android.media.ImageReader;
@@ -74,12 +76,10 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
     public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
         Log.i(TAG, "onSurfaceTextureAvailable()...");
         startBackgroundThread();
-        openCamera();
-        setUpCameraOutputs(width, height);
-
+        openCamera(width, height);
     }
 
-    private void openCamera() {
+    private void openCamera(int width, int height) {
 
         CameraManager manager = (CameraManager) mContext.getSystemService(Context.CAMERA_SERVICE);
 
@@ -105,6 +105,8 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
             e.printStackTrace();
         }
 
+        setUpCameraOutputs(width, height);
+
         try {
             if (ActivityCompat.checkSelfPermission(mContext, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
                 // TODO: Consider calling
@@ -116,7 +118,7 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
                 // for ActivityCompat#requestPermissions for more details.
                 return;
             }
-            manager.openCamera(mCameraId, mStateCallback, null);
+            manager.openCamera(mCameraId, mStateCallback, mBackgroundHandler);
         } catch (CameraAccessException e) {
             // TODO Auto-generated catch block
             e.printStackTrace();
@@ -261,6 +263,21 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
 
     }
 
+    private CameraCaptureSession.CaptureCallback mCaptureCallback = new CameraCaptureSession.CaptureCallback() {
+
+        @Override
+        public void onCaptureCompleted (CameraCaptureSession session, CaptureRequest request, TotalCaptureResult result){
+            Log.i(TAG, "onCaptureCompleted()...");
+
+        }
+
+        @Override
+        public void onCaptureFailed (CameraCaptureSession session, CaptureRequest request, CaptureFailure failure){
+            Log.i(TAG, "onCaptureFailed()...");
+        }
+
+    };
+
     public void setUpPhotoOutputs() {
 
         /*
@@ -309,7 +326,10 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
 
             Image mImage = reader.acquireLatestImage();
             File mPicPath = getOutputMediaFile();
-            mBackgroundHandler.post(new ImageSaver(mImage, mPicPath));
+
+            ImageSaver mImageSaver = new ImageSaver(mImage, mPicPath);
+
+            mBackgroundHandler.post(mImageSaver);
 
         }
 
@@ -329,11 +349,7 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
         @Override
         public void run() {
 
-            if (mImage==null){
-                return;
-            }
-
-            ByteBuffer buffer = mImage.getPlanes()[0].getBuffer();
+            ByteBuffer buffer = (mImage.getPlanes()[0]).getBuffer();
 
             byte[] bytes = new byte[buffer.remaining()];
             buffer.get(bytes);
@@ -389,6 +405,7 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
      * Stops the background thread and its {@link Handler}.
      */
     private void stopBackgroundThread() {
+
         mBackgroundThread.quitSafely();
         try {
             mBackgroundThread.join();
@@ -399,6 +416,23 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
         }
     }
 
+    private void closeCamera() {
+
+        if (null != mCaptureSession) {
+            mCaptureSession.close();
+            mCaptureSession = null;
+        }
+        if (null != mCameraDevice) {
+            mCameraDevice.close();
+            mCameraDevice = null;
+        }
+        if (null != mImageReader) {
+            mImageReader.close();
+            mImageReader = null;
+        }
+
+    }
+
     @Override
     public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
     }
@@ -407,8 +441,7 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
     public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
         Log.i(TAG, "onSurfaceTextureDestroyed()...");
         stopBackgroundThread();
-        mCameraDevice.close();
-        mCameraDevice = null;
+        closeCamera();
         return false;
     }
 
