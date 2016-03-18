@@ -3,8 +3,13 @@
     xmlns:tools="http://schemas.android.com/tools"
     tools:context="camera2.erichc_li.com.camera2app.MainActivity">
     <item
-        android:id="@+id/action_settings"
+        android:id="@+id/format1"
         android:orderInCategory="100"
-        android:title="@string/action_settings"
-        app:showAsAction="never" />
+        android:title="@string/format1"
+        app:showAsAction="never"/>
+    <item
+        android:id="@+id/format2"
+        android:orderInCategory="100"
+        android:title="@string/format2"
+        app:showAsAction="never"/>
 </menu>

@@ -15,8 +15,11 @@ import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
+import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureFailure;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.CaptureResult;
+import android.hardware.camera2.DngCreator;
 import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.Image;
@@ -32,11 +35,12 @@ import android.util.Size;
 import android.view.Surface;
 import android.view.TextureView;
 import android.view.WindowManager;
+import android.widget.Toast;
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
@@ -46,12 +50,16 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
 
     private static final String TAG = Camera2Preview.class.getName();
     private final Context mContext;
+    private final int mFormat;
     private String mCameraId;
     private StreamConfigurationMap mapScalerStreamConig;
     private CameraCharacteristics mCameraCharacteristics;
 
     private Size mPreviewSize;
 
+    private CaptureResult mCaptureResult_G;
+
+    private CaptureRequest.Builder mCaptureBuilder;
     private CaptureRequest.Builder mPreviewRequestBuilder;
     private CameraCaptureSession mCaptureSession;
     private ImageReader mImageReader;
@@ -66,10 +74,12 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
      */
     private Handler mBackgroundHandler;
 
-    public Camera2Preview(Context context) {
+
+    public Camera2Preview(Context context,int format) {
         super(context);
         this.setSurfaceTextureListener(this);
         mContext = context;
+        mFormat = format;
     }
 
     @Override
@@ -133,7 +143,6 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
         @Override
         public void onOpened(@NonNull CameraDevice cameraDevice) {
             // This method is called when the camera is opened.  We start camera preview here.
-
             mCameraDevice = cameraDevice;
             createCameraPreviewSession();
         }
@@ -230,67 +239,97 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
         // 3.
         // Here, we create a CameraCaptureSession for camera preview.
         try {
-            mCameraDevice.createCaptureSession(Arrays.asList(mSurface, mImageReader.getSurface()),
-                new CameraCaptureSession.StateCallback() {
-
-                    @Override
-                    public void onConfigured(@NonNull CameraCaptureSession cameraCaptureSession) {
-
-                        // When the session is ready, we start displaying the preview.
-                        mCaptureSession = cameraCaptureSession;
-                        try {
-
-                            // Auto focus should be continuous for camera preview.
-                            mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-
-                            // 4.
-                            // Finally, we start displaying the camera preview.
-                            mCaptureSession.setRepeatingRequest(mPreviewRequestBuilder.build(), null, mBackgroundHandler);
-                        } catch (CameraAccessException e) {
-                            e.printStackTrace();
-                        }
-                    }
-
-                    @Override
-                    public void onConfigureFailed(@NonNull CameraCaptureSession cameraCaptureSession) {
-                        Log.i(TAG,"Failed");
-                    }
-                }, null
-            );
+            mCameraDevice.createCaptureSession(Arrays.asList(mSurface, mImageReader.getSurface()), mSessionStateCallback, mBackgroundHandler);
         } catch (CameraAccessException e1) {
             e1.printStackTrace();
         }
 
     }
 
-    private CameraCaptureSession.CaptureCallback mCaptureCallback = new CameraCaptureSession.CaptureCallback() {
+    private CameraCaptureSession.StateCallback mSessionStateCallback = new CameraCaptureSession.StateCallback() {
+        @Override
+        public void onConfigured(CameraCaptureSession session) {
+            try {
+                updatePreview(session);
+            } catch (CameraAccessException e) {
+                e.printStackTrace();
+            }
+        }
 
+        @Override
+        public void onConfigureFailed(CameraCaptureSession session) {
+
+        }
+    };
+
+    private void updatePreview(CameraCaptureSession session) throws CameraAccessException {
+
+        // When the session is ready, we start displaying the preview.
+        mCaptureSession = session;
+        try {
+            // Auto focus should be continuous for camera preview.
+            mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+            mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON);
+            mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO);
+
+            // 4.
+            // Finally, we start displaying the camera preview.
+            mCaptureSession.setRepeatingRequest(mPreviewRequestBuilder.build(), null, mBackgroundHandler);
+        } catch (CameraAccessException e) {
+            e.printStackTrace();
+        }
+
+    }
+
+    private CameraCaptureSession.CaptureCallback mCaptureCallback = new CameraCaptureSession.CaptureCallback() {
         @Override
         public void onCaptureCompleted (CameraCaptureSession session, CaptureRequest request, TotalCaptureResult result){
             Log.i(TAG, "onCaptureCompleted()...");
-
+            mCaptureResult_G = result;
         }
 
         @Override
         public void onCaptureFailed (CameraCaptureSession session, CaptureRequest request, CaptureFailure failure){
             Log.i(TAG, "onCaptureFailed()...");
         }
-
     };
 
     public void setUpPhotoOutputs() {
 
-        /*
-        for (Size mSize : mapScalerStreamConig.getOutputSizes(ImageFormat.JPEG)){
-            Log.i(TAG,"mSize = "+mSize);
+        int mPicFormat = ImageFormat.UNKNOWN;
+
+        switch (mFormat){
+            case ImageFormat.JPEG:
+
+                for (Size mSize : mapScalerStreamConig.getOutputSizes(ImageFormat.JPEG)){
+                    Log.i(TAG,"mSize = "+mSize);
+                }
+
+                mPicFormat = ImageFormat.JPEG;
+                break;
+            case ImageFormat.RAW_SENSOR:
+
+                if(contains(mCameraCharacteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES),
+                        CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)) {
+
+                    for (Size mSize : mapScalerStreamConig.getOutputSizes(ImageFormat.RAW_SENSOR)) {
+                        Log.i(TAG, "mSize = " + mSize);
+                    }
+                    mPicFormat = ImageFormat.RAW_SENSOR;
+                } else {
+                    Log.i(TAG,"Not support RAW");
+                    Toast.makeText(mContext, "Not support RAW, so use the JPEG Format.", Toast.LENGTH_LONG).show();
+                    mPicFormat = ImageFormat.JPEG;
+                }
+                break;
         }
-        */
 
         // create the photo size
-        Size[] outputSize = mapScalerStreamConig.getOutputSizes(ImageFormat.JPEG);
+        Size[] outputSize = mapScalerStreamConig.getOutputSizes(mPicFormat);
 
         // For still image captures, we use the largest available size.
-        mImageReader = ImageReader.newInstance(outputSize[0].getWidth(), outputSize[0].getHeight(), ImageFormat.JPEG, /*maxImages*/2);
+        mImageReader = ImageReader.newInstance(outputSize[0].getWidth(), outputSize[0].getHeight(), mPicFormat, /*maxImages*/2);
+
         mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mBackgroundHandler);
 
     }
@@ -299,9 +338,9 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
 
         try {
             // We set up a CaptureRequest.Builder to capture the pic.
-            CaptureRequest.Builder captureBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
-            captureBuilder.addTarget(mImageReader.getSurface());
-            mCaptureSession.capture(captureBuilder.build(), null, mBackgroundHandler);
+            mCaptureBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+            mCaptureBuilder.addTarget(mImageReader.getSurface());
+            mCaptureSession.capture(mCaptureBuilder.build(), mCaptureCallback, mBackgroundHandler);
         } catch (CameraAccessException e) {
             // TODO Auto-generated catch block
             e.printStackTrace();
@@ -313,7 +352,17 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
 
         File path = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "100ANDRO");
         String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
-        String photoPath = path.getPath() + File.separator + "IMG_" + timeStamp + ".jpg";
+        String photoPath = null;
+
+        switch (mFormat) {
+            case ImageFormat.JPEG:
+                photoPath = path.getPath() + File.separator + "IMG_" + timeStamp + ".jpg";
+                break;
+            case ImageFormat.RAW_SENSOR:
+                photoPath = path.getPath() + File.separator + "RAW_" + timeStamp + ".dng";
+                break;
+        }
+
         Log.i(TAG, photoPath);
         File photo = new File(photoPath);
 
@@ -327,7 +376,7 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
             Image mImage = reader.acquireLatestImage();
             File mPicPath = getOutputMediaFile();
 
-            ImageSaver mImageSaver = new ImageSaver(mImage, mPicPath);
+            ImageSaver mImageSaver = new ImageSaver(mImage, mPicPath,mCaptureResult_G ,mCameraCharacteristics);
 
             mBackgroundHandler.post(mImageSaver);
 
@@ -341,47 +390,96 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
         private final Image mImage;
         private final File mPicPath;
 
-        ImageSaver(Image image,File picPath){
+        /**
+         * The CaptureResult for this image capture.
+         */
+        private final CaptureResult mCaptureResult;
+
+        /**
+         * The CameraCharacteristics for this camera device.
+         */
+        private final CameraCharacteristics mCharacteristics;
+
+        ImageSaver(Image image,File picPath, CaptureResult result, CameraCharacteristics characteristics){
             mImage = image;
             mPicPath = picPath;
+            mCaptureResult = result;
+            mCharacteristics = characteristics;
         }
 
         @Override
         public void run() {
+            int format = mImage.getFormat();
+            boolean success = false;
 
-            ByteBuffer buffer = (mImage.getPlanes()[0]).getBuffer();
+            switch (format) {
+                case ImageFormat.JPEG: {
+                    ByteBuffer buffer = mImage.getPlanes()[0].getBuffer();
+                    byte[] bytes = new byte[buffer.remaining()];
+                    buffer.get(bytes);
+                    FileOutputStream output = null;
 
-            byte[] bytes = new byte[buffer.remaining()];
-            buffer.get(bytes);
-            FileOutputStream output = null;
+                    Bitmap pictureTaken = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                    Matrix matrix = new Matrix();
+                    matrix.preRotate(90);
+                    pictureTaken = Bitmap.createBitmap(pictureTaken ,0,0, pictureTaken.getWidth(), pictureTaken.getHeight(),matrix,true);
 
-            Bitmap pictureTaken = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
-            Matrix matrix = new Matrix();
-            matrix.preRotate(90);
-            pictureTaken = Bitmap.createBitmap(pictureTaken ,0,0, pictureTaken.getWidth(), pictureTaken.getHeight(),matrix,true);
-
-            try {
-
-                output = new FileOutputStream(mPicPath.getPath());
-                pictureTaken.compress(Bitmap.CompressFormat.JPEG, 50, output);
-                pictureTaken.recycle();
-                output.write(bytes);
-                output.close();
-                galleryAddPic(mPicPath);
-
-            } catch (FileNotFoundException e) {
-                e.printStackTrace();
-            } catch (IOException e) {
-                e.printStackTrace();
-            } finally {
-                mImage.close();
-                if (null != output) {
                     try {
+                        output = new FileOutputStream(mPicPath.getPath());
+                        pictureTaken.compress(Bitmap.CompressFormat.JPEG, 50, output);
+                        pictureTaken.recycle();
+                        output.write(bytes);
                         output.close();
+                        success = true;
                     } catch (IOException e) {
                         e.printStackTrace();
+                    } finally {
+                        mImage.close();
+                        if (null != output) {
+                            try {
+                                output.close();
+                            } catch (IOException e) {
+                                e.printStackTrace();
+                            }
+                        }
                     }
+                    break;
                 }
+                case ImageFormat.RAW_SENSOR: {
+                    DngCreator dngCreator = new DngCreator(mCharacteristics, mCaptureResult);
+                    FileOutputStream output = null;
+                    try {
+                        output = new FileOutputStream(mPicPath.getPath());
+                        dngCreator.writeImage(output, mImage);
+                        success = true;
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    } finally {
+                        mImage.close();
+                        closeOutput(output);
+                    }
+                    break;
+                }
+                default: {
+                    Log.e(TAG, "Cannot save image, unexpected image format:" + format);
+                    break;
+                }
+
+            }
+
+            if(success){
+                galleryAddPic(mPicPath);
+            }
+
+        }
+    }
+
+    private static void closeOutput(OutputStream outputStream) {
+        if (null != outputStream) {
+            try {
+                outputStream.close();
+            } catch (IOException e) {
+                e.printStackTrace();
             }
         }
     }
@@ -435,6 +533,12 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
 
     @Override
     public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
+
+    }
+
+    @Override
+    public void onSurfaceTextureUpdated(SurfaceTexture surface) {
+
     }
 
     @Override
@@ -445,9 +549,24 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
         return false;
     }
 
-    @Override
-    public void onSurfaceTextureUpdated(SurfaceTexture surface) {
-
+    /**
+     * Return true if the given array contains the given integer.
+     *
+     * @param modes array to check.
+     * @param mode  integer to get for.
+     * @return true if the array contains the given integer, otherwise false.
+     */
+    private static boolean contains(int[] modes, int mode) {
+        if (modes == null) {
+            return false;
+        }
+        for (int i : modes) {
+            if (i == mode) {
+                return true;
+            }
+        }
+        return false;
     }
+
 }
 
