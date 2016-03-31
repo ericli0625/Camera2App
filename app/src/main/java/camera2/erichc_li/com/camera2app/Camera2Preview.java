@@ -74,6 +74,10 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
      */
     private Handler mBackgroundHandler;
 
+    /**
+     * Request code for camera permissions.
+     */
+    private static final int REQUEST_CAMERA_PERMISSIONS = 1;
 
     public Camera2Preview(Context context,int format) {
         super(context);
@@ -383,7 +387,6 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
         }
 
     };
-
 
     private class ImageSaver implements Runnable {
 
