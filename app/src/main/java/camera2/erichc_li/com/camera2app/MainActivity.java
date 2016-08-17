@@ -21,11 +21,17 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = MainActivity.class.getName();
 
     private static final int PERMISSION_REQUEST_CAMERA = 0;
+    private static final int PERMISSION_REQUEST_SAVE_PHOTO = 2;
 
     private Camera2Preview mCamera2Preview;
     private FrameLayout mFrameLayout;
 
     private View mLayout;
+    private boolean mFlag1 = false;
+    private boolean mFlag2 = false;
+
+    private boolean mFlag3 = false;
+    private boolean mFlag4 = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -48,7 +54,7 @@ public class MainActivity extends AppCompatActivity {
 
         mFrameLayout = (FrameLayout) findViewById(R.id.camera_textureview);
 
-        showCameraPreview();
+        showCheckPermission1();
 
     }
 
@@ -67,7 +73,21 @@ public class MainActivity extends AppCompatActivity {
                 Snackbar.make(mLayout, "Camera permission was granted. Starting preview.",
                         Snackbar.LENGTH_SHORT)
                         .show();
-                startCamera();
+                mFlag1 = true;
+            } else {
+                // Permission request was denied.
+                Snackbar.make(mLayout, "Camera permission request was denied.",
+                        Snackbar.LENGTH_SHORT)
+                        .show();
+            }
+        } else if (requestCode == PERMISSION_REQUEST_SAVE_PHOTO) {
+            // Request for camera permission.
+            if (grantResults.length == 1 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                // Permission has been granted. Start camera preview Activity.
+                Snackbar.make(mLayout, "Camera permission was granted. Save Photo.",
+                        Snackbar.LENGTH_SHORT)
+                        .show();
+                mFlag2 = true;
             } else {
                 // Permission request was denied.
                 Snackbar.make(mLayout, "Camera permission request was denied.",
@@ -75,9 +95,14 @@ public class MainActivity extends AppCompatActivity {
                         .show();
             }
         }
+
+        if (mFlag1 && mFlag2){
+            startCamera();
+        }
+
     }
 
-    private void showCameraPreview() {
+    private void showCheckPermission1() {
         // Check if the Camera permission has been granted
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
                 == PackageManager.PERMISSION_GRANTED) {
@@ -85,10 +110,27 @@ public class MainActivity extends AppCompatActivity {
             Snackbar.make(mLayout,
                     "Camera permission is available. Starting preview.",
                     Snackbar.LENGTH_SHORT).show();
-            startCamera();
+            mFlag3 = true;
         } else {
             // Permission is missing and must be requested.
             requestCameraPermission();
+        }
+
+        // Check if the Camera permission has been granted
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                == PackageManager.PERMISSION_GRANTED) {
+            // Permission is already available, start camera preview
+            Snackbar.make(mLayout,
+                    "Camera permission is available. Save Photo.",
+                    Snackbar.LENGTH_SHORT).show();
+            mFlag4 = true;
+        } else {
+            // Permission is missing and must be requested.
+            requestSavePhotoPermission();
+        }
+
+        if (mFlag3 && mFlag4){
+            startCamera();
         }
     }
 
@@ -127,6 +169,34 @@ public class MainActivity extends AppCompatActivity {
             // Request the permission. The result will be received in onRequestPermissionResult().
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA},
                     PERMISSION_REQUEST_CAMERA);
+        }
+    }
+
+    private void requestSavePhotoPermission() {
+        // Permission has not been granted and must be requested.
+        if (ActivityCompat.shouldShowRequestPermissionRationale(this,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+            // Provide an additional rationale to the user if the permission was not granted
+            // and the user would benefit from additional context for the use of the permission.
+            // Display a SnackBar with a button to request the missing permission.
+            Snackbar.make(mLayout, "Camera access is required to save the photo.",
+                    Snackbar.LENGTH_INDEFINITE).setAction("OK", new View.OnClickListener() {
+                @Override
+                public void onClick(View view) {
+                    // Request the permission
+                    ActivityCompat.requestPermissions(MainActivity.this,
+                            new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
+                            PERMISSION_REQUEST_SAVE_PHOTO);
+                }
+            }).show();
+
+        } else {
+            Snackbar.make(mLayout,
+                    "Permission is not available. Requesting camera permission.",
+                    Snackbar.LENGTH_SHORT).show();
+            // Request the permission. The result will be received in onRequestPermissionResult().
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
+                    PERMISSION_REQUEST_SAVE_PHOTO);
         }
     }
 

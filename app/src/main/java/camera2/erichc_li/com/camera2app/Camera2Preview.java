@@ -354,7 +354,7 @@ public class Camera2Preview extends TextureView implements TextureView.SurfaceTe
 
     private File getOutputMediaFile() {
 
-        File path = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "100ANDRO");
+        File path = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "Camera");
         String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
         String photoPath = null;
 
